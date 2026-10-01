@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07060f" />
   <title>Mr. Grumble — voice English tutor</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Crect x=%228%22 y=%2210%22 width=%2284%22 height=%2280%22 rx=%2236%22 fill=%22%236a4ff0%22/%3E%3Ccircle cx=%2235%22 cy=%2245%22 r=%2210%22 fill=%22%23fff%22/%3E%3Ccircle cx=%2265%22 cy=%2245%22 r=%2210%22 fill=%22%23fff%22/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=20261001b" />
 </head>
 <body data-state="idle" data-mode="demo">
   <div class="bg" aria-hidden="true"></div>
@@ -107,11 +107,13 @@
       </svg>
     </button>
     <p id="hint" class="hint">Нажми и говори</p>
-    <p id="caption" class="caption" hidden></p>
+    <p id="caption" class="caption" aria-live="polite" hidden></p>
     <p id="toast" class="toast" aria-live="polite"></p>
   </main>
 
-  <button id="langBtn" class="lang" title="Язык распознавания (demo)">AUTO</button>
+  <p id="liveNote" class="live-note">DEMO: простое распознавание и системный голос. LIVE-режим (ключ OpenAI в ⚙) слышит намного лучше и говорит живым голосом.</p>
+
+  <button id="langBtn" class="lang" title="Язык распознавания (demo): EN = en-US, IT = it-IT">EN</button>
 
   <dialog id="settings" class="settings">
     <form method="dialog" class="settings-inner">
@@ -140,10 +142,16 @@
 
       <label class="check">
         <input id="captionToggle" type="checkbox" />
-        <span>Показывать отладочную подпись</span>
+        <span>Показывать, что я услышал (живая подпись)</span>
       </label>
 
-      <p class="note">Без ключа работает DEMO (Web Speech API, лучше в Chrome). С ключом — OpenAI Realtime (gpt-realtime-2.1-mini) через WebRTC. Ключ в браузере — только для личного локального использования.</p>
+      <div class="row">
+        <button id="testSoundBtn" type="button" class="btn">🔊 Проверить звук</button>
+        <span class="spacer"></span>
+      </div>
+      <p id="soundStatus" class="note sound-status" hidden></p>
+
+      <p class="note">Без ключа работает DEMO: распознавание и голос браузера (Chrome на Android, Safari на iPhone). Слышит оно так себе. С ключом включается LIVE: OpenAI Realtime (gpt-realtime-2.1-mini) через WebRTC. LIVE слышит намного лучше и говорит естественным голосом. Ключ в браузере годится только для личного использования. На iPhone DEMO-голос может глушить беззвучный режим: проверь переключатель сбоку.</p>
 
       <div class="row">
         <button id="clearKeyBtn" type="button" class="btn ghost">Удалить ключ</button>
@@ -154,6 +162,6 @@
     </form>
   </dialog>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20261001b"></script>
 </body>
 </html>

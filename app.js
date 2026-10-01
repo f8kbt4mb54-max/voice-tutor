@@ -16,7 +16,7 @@
   // ---------------------------------------------------------------------------
   // Config
   // ---------------------------------------------------------------------------
-  const LS = { key: "vt.openaiKey", lang: "vt.lang", caption: "vt.caption", voice: "vt.voice" };
+  const LS = { key: "vt.openaiKey", lang: "vt.lang", caption: "vt.caption2", voice: "vt.voice" };
   const REALTIME_MODEL = "gpt-realtime-2.1-mini";
   const OPENAI = "https://api.openai.com/v1";
   const EMOTIONS = ["neutral", "happy", "angry", "sad", "surprised", "bored", "thinking"];
@@ -57,6 +57,7 @@ Avatar emotion:
   const gearBtn = $("gearBtn"), langBtn = $("langBtn"), modeBadge = $("modeBadge");
   const dlg = $("settings"), keyInput = $("keyInput"), voiceSelect = $("voiceSelect");
   const captionToggle = $("captionToggle"), clearKeyBtn = $("clearKeyBtn");
+  const testSoundBtn = $("testSoundBtn"), soundStatus = $("soundStatus");
 
   const HINTS = {
     idle: "Нажми и говори",
@@ -90,19 +91,27 @@ Avatar emotion:
     modeBadge.title = real ? `OpenAI Realtime · ${REALTIME_MODEL}` : "Demo: Web Speech API + canned replies";
   }
 
-  // caption (debug only, hidden by default)
-  function caption(text) {
-    captionEl.textContent = text;
-    if (text) console.log("[caption]", text);
+  // caption: faint live line under the face — what the recognizer heard (live), the tutor's text,
+  // and error messages. Toggleable in settings; errors are shown even when it's off (force).
+  let captionOn = true;
+  function caption(text, opts = {}) {
+    captionEl.textContent = text || "";
+    captionEl.classList.toggle("err", !!opts.err);
+    captionEl.classList.toggle("interim", !!opts.interim);
+    captionEl.hidden = !text || !(captionOn || opts.force);
+    if (text && !opts.interim) console.log("[caption]", text);
   }
+  const dbg = (...a) => console.log("[debug]", ...a);
   function setCaptionVisible(v) {
-    captionEl.hidden = !v;
+    captionOn = !!v;
     localStorage.setItem(LS.caption, v ? "1" : "0");
-    captionToggle.checked = v;
+    captionToggle.checked = !!v;
+    if (!captionEl.classList.contains("err")) captionEl.hidden = !captionOn || !captionEl.textContent;
   }
   let toastTimer = 0;
-  function toast(text, ms = 1400) {
+  function toast(text, ms = 1400, long = false) {
     toastEl.textContent = text;
+    toastEl.classList.toggle("long", !!long);
     toastEl.classList.add("show");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toastEl.classList.remove("show"), ms);
@@ -112,7 +121,7 @@ Avatar emotion:
   // Audio levels (mic + tutor output) via Web Audio analysers
   // ---------------------------------------------------------------------------
   let audioCtx = null;
-  const levels = { mic: 0, out: 0 };
+  const levels = { mic: 0, out: 0, fake: 0 }; // fake: mic activity from recognition events (phones)
   let micAnalyser = null, outAnalyser = null, micSrc = null, outSrc = null;
   const buf = new Float32Array(1024);
 
@@ -322,7 +331,8 @@ Avatar emotion:
       last = now;
 
       // live levels
-      const micL = rms(micAnalyser), outL = rms(outAnalyser);
+      const micL = Math.max(rms(micAnalyser), levels.fake), outL = rms(outAnalyser);
+      levels.fake *= Math.exp(-dt * 2.5);
       levels.mic += (micL - levels.mic) * .35;
       levels.out += (outL - levels.out) * .45;
 
@@ -430,24 +440,87 @@ Avatar emotion:
   // ---------------------------------------------------------------------------
   // DEMO MODE — Web Speech API + canned rude replies
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // DEMO MODE — Web Speech API + canned rude replies
+  // ---------------------------------------------------------------------------
+  // Platform quirks
+  const UA = navigator.userAgent || "";
+  const IS_IOS = /iP(hone|od|ad)/.test(UA) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const IS_ANDROID = /Android/i.test(UA);
+  const IS_MOBILE = IS_IOS || IS_ANDROID || !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
+  // A second getUserMedia stream (eye/brow level meter) running next to SpeechRecognition degrades or
+  // breaks recognition on Android and switches iOS into "play-and-record" (quiet earpiece output).
+  // So the extra mic meter is desktop-only; on phones the face reacts to recognition events instead.
+  const USE_MIC_METER = !IS_MOBILE;
+  const synth = window.speechSynthesis || null;
+  const HAS_TTS = !!(synth && window.SpeechSynthesisUtterance);
+  const tidy = (t) => String(t || "").replace(/\s+/g, " ").trim();
+
+  // Safari 16.4+ Audio Session API: "playback" = loudspeaker category (not the earpiece, not silenced by
+  // the ring/silent switch); "auto" lets WebKit pick play-and-record while the mic is in use.
+  function setAudioSession(type) {
+    try { if (navigator.audioSession && navigator.audioSession.type !== type) navigator.audioSession.type = type; } catch {}
+  }
+
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let langMode = localStorage.getItem(LS.lang) || "AUTO"; // AUTO | EN | IT
-  let recognition = null, recFinal = "", recInterim = "", recConfidence = 1, recError = "";
+  let langMode = localStorage.getItem(LS.lang) === "IT" ? "IT" : "EN"; // EN (en-US, default) | IT (it-IT)
   let demoMicStream = null;
 
   function recLang() { return langMode === "IT" ? "it-IT" : "en-US"; }
 
-  // --- voices
+  // --- voices. Mobile: getVoices() is empty at first and fills in later (voiceschanged, or just polling
+  // on iOS). Android may report "en_US" instead of "en-US".
   let voices = [];
-  function loadVoices() { voices = window.speechSynthesis ? speechSynthesis.getVoices() : []; }
-  if (window.speechSynthesis) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+  const bcp47 = (l) => String(l || "").replace(/_/g, "-");
+  const normLang = (l) => bcp47(l).toLowerCase();
+  function loadVoices() {
+    try { voices = HAS_TTS ? (synth.getVoices() || []) : []; } catch { voices = []; }
+    return voices;
+  }
+  function onSynth(type, fn) {
+    if (!HAS_TTS) return () => {};
+    if (synth.addEventListener) { synth.addEventListener(type, fn); return () => synth.removeEventListener(type, fn); }
+    synth["on" + type] = fn; return () => { if (synth["on" + type] === fn) synth["on" + type] = null; };
+  }
+  let voicesWait = null;
+  function voicesReady(timeout = 1500) {
+    if (!HAS_TTS || loadVoices().length) return Promise.resolve(voices);
+    if (!voicesWait) voicesWait = new Promise((resolve) => {
+      let done = false, poll = 0, to = 0, off = () => {};
+      const finish = () => {
+        if (done) return;
+        done = true; clearInterval(poll); clearTimeout(to); off();
+        loadVoices(); voicesWait = null; resolve(voices);
+      };
+      const check = () => { if (loadVoices().length) finish(); };
+      off = onSynth("voiceschanged", check);
+      poll = setInterval(check, 250);
+      to = setTimeout(finish, timeout); // fallback: speak without an explicit voice (lang only)
+    });
+    return voicesWait;
+  }
+  if (HAS_TTS) { loadVoices(); onSynth("voiceschanged", loadVoices); voicesReady(4000); }
+
+  const badVoices = new Set(); // voices that failed to start -> never chosen again
+  const NOVELTY = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Jester|Organ|Pipe Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Kathy|Ralph|Grandma|Grandpa)\b/;
+  // Returns an installed voice for "en"/"it" or null. With null the utterance gets only .lang
+  // (setting a null/wrong voice can mute speech on mobile).
   function pickVoice(lang) {
+    const want = lang === "it" ? "it" : "en";
+    const list = voices.filter((v) => v && !badVoices.has(v.voiceURI || v.name) && normLang(v.lang).startsWith(want));
+    if (!list.length) return null;
     const prefs = lang === "it"
-      ? ["Google italiano", "Luca", "Alice", "Microsoft Diego", "Microsoft Elsa"]
-      : ["Google UK English Male", "Daniel", "Microsoft Ryan", "Arthur", "Oliver", "Google UK English Female", "Microsoft George"];
-    for (const p of prefs) { const v = voices.find((v) => v.name.includes(p)); if (v) return v; }
-    const code = lang === "it" ? "it" : "en-GB";
-    return voices.find((v) => v.lang?.startsWith(code)) || (lang === "en" ? voices.find((v) => v.lang?.startsWith("en")) : null) || null;
+      ? ["Google italiano", "Alice", "Luca", "Federica", "Paola"]
+      : ["Daniel", "Google UK English Male", "Microsoft Ryan", "Arthur", "Microsoft George", "Samantha", "Google US English"];
+    for (const p of prefs) { const v = list.find((v) => v.name && v.name.includes(p)); if (v) return v; }
+    const sane = list.filter((v) => !NOVELTY.test(v.name || ""));
+    const local = sane.filter((v) => v.localService !== false); // network voices can be silent offline
+    const pool = local.length ? local : sane;
+    for (const code of (lang === "it" ? ["it-it"] : ["en-gb", "en-us"])) {
+      const v = pool.find((v) => normLang(v.lang) === code && v.default) || pool.find((v) => normLang(v.lang) === code);
+      if (v) return v;
+    }
+    return pool.find((v) => v.default) || pool[0] || null;
   }
 
   // --- heuristics
@@ -596,7 +669,7 @@ Avatar emotion:
     if (!t) return pick(R.nohear);
     if (/^(ciao|salve)\b/.test(low)) return pick(R.ciao);
     if (looksItalian(t)) return pick(R.italian);
-    if (langMode === "AUTO" && confidence > 0 && confidence < .35 && words.length > 1) return pick(R.mumble);
+    if (langMode === "EN" && confidence > 0 && confidence < .3 && words.length > 1) return pick(R.mumble);
     const m = findMistakes(t);
     if (m) {
       const intro = pick(R.mistakeIntro);
@@ -609,98 +682,402 @@ Avatar emotion:
     return pick(R.correct);
   }
 
-  // --- TTS
-  let ttsQueue = [], ttsActive = false, ttsKeep = [];
-  function speak(segs, emotion) {
-    if (!window.speechSynthesis) { toast("speechSynthesis недоступен"); setState("idle"); return; }
-    speechSynthesis.cancel();
-    face.setEmotion(emotion === "annoyed" ? "bored" : emotion);
-    caption("tutor [" + emotion + "]: " + segs.map((s) => s.text).join(" "));
-    ttsQueue = segs.slice();
-    ttsActive = true;
-    setState("speaking");
-    face.setDemoSpeaking(true);
-    nextUtterance();
-  }
-  function nextUtterance() {
-    if (!ttsActive) return;
-    const seg = ttsQueue.shift();
-    if (!seg) { ttsActive = false; face.setDemoSpeaking(false); ttsKeep = []; setState("idle"); return; }
-    const u = new SpeechSynthesisUtterance(seg.text);
-    const v = pickVoice(seg.lang);
-    if (v) u.voice = v;
-    u.lang = v?.lang || (seg.lang === "it" ? "it-IT" : "en-GB");
-    u.rate = seg.lang === "it" ? 1.05 : 1.0;
-    u.pitch = .9;
-    let done = false;
-    const finish = () => { if (done) return; done = true; clearTimeout(guard); face.setDemoSpeaking(false); setTimeout(() => { face.setDemoSpeaking(true); nextUtterance(); }, 160); };
-    // guard against Chrome sometimes never firing onend
-    const guard = setTimeout(finish, 2500 + seg.text.length * 95);
-    u.onboundary = () => face.wordBoundary();
-    u.onend = finish;
-    u.onerror = finish;
-    ttsKeep.push(u); // keep a reference (Chrome GC bug drops events otherwise)
-    speechSynthesis.speak(u);
-  }
-  function stopSpeaking() {
-    ttsActive = false; ttsQueue = [];
-    face.setDemoSpeaking(false);
-    if (window.speechSynthesis) speechSynthesis.cancel();
+  // --- TTS (speechSynthesis) with the mobile / Chrome workarounds:
+  //  * unlock: the first tap synchronously does cancel() + speak(" ") before anything async. iOS and
+  //    Android only play speech that was first started from a user gesture; later async speak() works.
+  //  * voice only set when an installed voice matches; .lang always set.
+  //  * resume() before speak, utterances kept referenced (Chrome GC drops their events otherwise),
+  //    text chunked into sentences (Chrome cuts long utterances off), watchdog for stalls/missing onend.
+  //  * recognition + mic are stopped before speaking (iOS routes output to the earpiece while capturing).
+  const tts = { queue: [], active: false, keep: [], gen: 0, startedAny: false, hintShown: false, opts: {}, full: "" };
+  let ttsUnlocked = false, unlockUtter = null;
+  const MUTE_HINT = "Не слышно? Проверь беззвучный режим и громкость";
+
+  function unlockTTS() {
+    if (!HAS_TTS || ttsUnlocked) return;
+    ttsUnlocked = true;
+    try {
+      synth.cancel();
+      unlockUtter = new SpeechSynthesisUtterance(" ");
+      unlockUtter.lang = "en-US";
+      unlockUtter.volume = 0.01;
+      synth.resume();
+      synth.speak(unlockUtter);
+    } catch (e) { console.warn("TTS unlock failed", e); }
+    loadVoices();
   }
 
-  // --- recognition
-  async function startListening() {
-    if (!SR) {
-      setState("idle", "Распознавание речи не поддерживается — открой в Chrome");
+  function splitSentences(text, max = 160) {
+    const parts = tidy(text).match(/[^.!?…]+(?:[.!?…]+["')\]]*|$)/g) || [];
+    const out = [];
+    let cur = "";
+    const push = (s) => { s = tidy(s); if (s) out.push(s); };
+    for (let p of parts) {
+      p = tidy(p);
+      if (!p) continue;
+      while (p.length > max) { // overlong sentence: cut at a comma, else at a space
+        let cut = p.lastIndexOf(", ", max);
+        if (cut < max * 0.4) cut = p.lastIndexOf(" ", max);
+        if (cut < 20) cut = max;
+        push(cur); cur = "";
+        push(p.slice(0, cut + 1)); p = tidy(p.slice(cut + 1));
+      }
+      if (!p) continue;
+      // glue very short bits ("Wrong!") to the next sentence so speech doesn't sound choppy
+      if (cur && cur.length >= 40) { push(cur); cur = p; }
+      else if (cur && (cur + " " + p).length > max) { push(cur); cur = p; }
+      else cur = cur ? cur + " " + p : p;
+    }
+    push(cur);
+    return out;
+  }
+
+  // opts: { sync: speak synchronously (inside a click), prefix: caption prefix, keepCaption,
+  //         onStart(), onNoStart(), onDone(started) }
+  function speak(segs, emotion, opts = {}) {
+    const wasListening = !!rec;
+    stopRecognition();
+    stopDemoMic();
+    face.setEmotion(emotion === "annoyed" ? "bored" : emotion);
+    const full = segs.map((s) => s.text).join(" ");
+    if (!opts.keepCaption) caption((opts.prefix ? opts.prefix + "\n" : "") + "— " + full);
+    if (!HAS_TTS) {
+      caption("🔇 Озвучка (speechSynthesis) недоступна в этом браузере.\n— " + full, { force: true, err: true });
+      setState("idle");
       return;
     }
-    stopSpeaking();
-    ensureAudioCtx();
-    recFinal = ""; recInterim = ""; recConfidence = 0; recError = "";
-    recognition = new SR();
-    recognition.lang = recLang();
-    recognition.interimResults = true;
-    recognition.continuous = false;
-    recognition.maxAlternatives = 1;
-    recognition.onresult = (ev) => {
-      let interim = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const r = ev.results[i];
-        if (r.isFinal) { recFinal += r[0].transcript; recConfidence = r[0].confidence; }
-        else interim += r[0].transcript;
-      }
-      recInterim = interim;
-      caption("you (" + recognition.lang + "): " + (recFinal + " " + recInterim).trim());
+    setAudioSession("playback");
+    const gen = ++tts.gen;
+    tts.queue = [];
+    for (const s of segs) splitSentences(s.text).forEach((t, i) => tts.queue.push({ lang: s.lang, text: t, gap: i ? 40 : 170 }));
+    tts.active = true; tts.startedAny = false; tts.opts = opts; tts.full = full; tts.keep = [];
+    setState("speaking");
+    face.setDemoSpeaking(true);
+    let busy = false;
+    try { busy = synth.speaking || synth.pending; } catch {}
+    if (busy) { try { synth.cancel(); } catch {} }
+    // Chrome can drop a speak() issued right after cancel(); outside a gesture a short delay is harmless.
+    if (!opts.sync && wasListening) setTimeout(() => nextUtterance(gen), REC_TO_TTS_GAP);
+    else if (busy && !opts.sync) setTimeout(() => nextUtterance(gen), 90);
+    else nextUtterance(gen);
+  }
+  function nextUtterance(gen) {
+    if (!tts.active || gen !== tts.gen) return;
+    const seg = tts.queue.shift();
+    if (!seg) { ttsFinished(gen); return; }
+    speakChunk(seg, gen, true);
+  }
+  function ttsFinished(gen) {
+    if (gen !== tts.gen) return;
+    tts.active = false; tts.keep = [];
+    face.setDemoSpeaking(false);
+    setAudioSession("auto");
+    if (!tts.startedAny) noAudioHint(MUTE_HINT, false); // ended/failed without ever starting
+    try { tts.opts.onDone?.(tts.startedAny); } catch {}
+    setState("idle");
+  }
+  function noAudioHint(msg = MUTE_HINT, withCaption = true) {
+    try { tts.opts.onNoStart?.(); } catch {}
+    if (tts.hintShown) return;
+    tts.hintShown = true; // one-time
+    toast(msg, 6500, true);
+    if (withCaption && tts.full && !tts.opts.keepCaption) caption((tts.opts.prefix ? tts.opts.prefix + "\n" : "") + "— " + tts.full, { force: true });
+  }
+  function speakChunk(seg, gen, allowVoice) {
+    const u = new SpeechSynthesisUtterance(seg.text);
+    const v = allowVoice ? pickVoice(seg.lang) : null;
+    if (v) { u.voice = v; u.lang = bcp47(v.lang); }
+    else u.lang = seg.lang === "it" ? "it-IT" : "en-US";
+    u.rate = seg.lang === "it" ? 1.02 : 0.97;
+    u.pitch = 0.9;
+    u.volume = 1;
+    const t0 = performance.now();
+    const maxMs = 6000 + seg.text.length * 120;
+    let started = false, done = false, quietSince = 0, hinted = false, wd = 0;
+    const stop = () => { done = true; clearInterval(wd); };
+    const next = () => {
+      if (done) return;
+      stop();
+      if (gen !== tts.gen || !tts.active) return;
+      face.setDemoSpeaking(false);
+      const gap = tts.queue[0]?.gap ?? 0;
+      setTimeout(() => { if (gen !== tts.gen || !tts.active) return; face.setDemoSpeaking(true); nextUtterance(gen); }, gap);
     };
-    recognition.onerror = (ev) => { recError = ev.error; console.warn("SpeechRecognition error", ev.error); };
-    recognition.onend = () => {
+    const giveUp = () => { // nothing ever started: don't grind through every chunk silently
+      stop();
+      try { synth.cancel(); } catch {}
+      if (gen !== tts.gen) return;
+      caption((tts.opts.prefix ? tts.opts.prefix + "\n" : "") + "🔇 " + tts.full, { force: true, err: true });
+      ttsFinished(gen);
+    };
+    const retryWithoutVoice = (why) => {
+      if (done) return;
+      dbg("TTS: retry without explicit voice", v && v.name, why);
+      if (v) badVoices.add(v.voiceURI || v.name);
+      stop();
+      try { synth.cancel(); } catch {}
+      setTimeout(() => { if (gen === tts.gen && tts.active) speakChunk(seg, gen, false); }, 80);
+    };
+    u.onstart = () => {
+      if (done) return;
+      started = true;
+      if (!tts.startedAny) { tts.startedAny = true; try { tts.opts.onStart?.(); } catch {} }
+    };
+    u.onboundary = () => face.wordBoundary();
+    u.onend = () => next();
+    u.onerror = (e) => {
+      const err = (e && e.error) || "";
+      dbg("TTS error:", err);
+      if (done) return;
+      if (err === "interrupted" || err === "canceled") return next();
+      if (!started && v && /voice|language|synthesis/.test(err)) return retryWithoutVoice(err);
+      if (err === "not-allowed") { ttsUnlocked = false; noAudioHint("Браузер заблокировал звук — нажми на лицо ещё раз"); }
+      if (!started && !tts.startedAny) return giveUp();
+      next();
+    };
+    wd = setInterval(() => { // watchdog
+      if (done) return;
+      if (gen !== tts.gen) { stop(); return; }
+      const now = performance.now(), el = now - t0;
+      let speaking = false, pending = false, paused = false;
+      try { speaking = synth.speaking; pending = synth.pending; paused = synth.paused; } catch {}
+      if (paused) { try { synth.resume(); } catch {} } // Chrome/Android sometimes leaves the queue paused
+      if (!started) {
+        if (el > 2000 && !hinted && !tts.startedAny) { hinted = true; noAudioHint(); }
+        if (el > 3000 && v) return retryWithoutVoice("no onstart in 3s");
+        if (el > 6000) { if (!tts.startedAny) return giveUp(); try { synth.cancel(); } catch {} return next(); }
+      } else if (!speaking && !pending) {
+        if (!quietSince) quietSince = now; // Chrome sometimes never fires onend
+        else if (now - quietSince > 1200) return next();
+      } else quietSince = 0;
+      if (el > maxMs) { try { synth.cancel(); } catch {} next(); }
+    }, 300);
+    tts.keep.push(u);
+    try { synth.resume(); } catch {}
+    try { synth.speak(u); } catch (e) { console.error(e); if (!tts.startedAny) giveUp(); else next(); }
+  }
+  function stopSpeaking() {
+    tts.gen++;
+    const wasActive = tts.active;
+    tts.active = false; tts.queue = [];
+    face.setDemoSpeaking(false);
+    // only cancel our own speech (cancelling the just-spoken unlock utterance is pointless)
+    if (HAS_TTS && wasActive) { try { synth.cancel(); } catch {} }
+  }
+
+  // "Проверить звук" (settings): speaks synchronously inside the click, reports what happened
+  function testSound() {
+    const st = soundStatus;
+    st.hidden = false;
+    if (!HAS_TTS) { st.textContent = "✗ speechSynthesis недоступен в этом браузере."; return; }
+    if (realSession) { st.textContent = "Сначала заверши LIVE-сессию (нажми на лицо)."; return; }
+    ttsUnlocked = true; // this very tap unlocks speech
+    loadVoices();
+    const v = pickVoice("en");
+    const info = `\nГолосов: ${voices.length} · ${v ? v.name + " (" + bcp47(v.lang) + ")" : "системный голос en-US"}`;
+    st.textContent = "▶ Говорю тестовую фразу…" + info;
+    speak([en("Hello! This is Mister Grumble. If you can hear me, the sound works.")], "happy", {
+      sync: true,
+      prefix: "🔊 тест звука",
+      onStart: () => { st.textContent = "✓ Речь запущена. Если тихо — прибавь громкость, на iPhone проверь беззвучный режим (переключатель сбоку)." + info; },
+      onNoStart: () => { st.textContent = "✗ Речь не стартовала. " + MUTE_HINT + ", затем нажми ещё раз." + info; },
+    });
+  }
+
+  // --- recognition: lang set explicitly, interim results, 3 alternatives, auto-stop after silence
+  let rec = null; // current session { r, final, interim, conf, alts, error, stopping, timers }
+  let recEndedAt = -1e9; // iOS: give the audio session ~300 ms to leave "record" mode before speaking
+  const REC_TO_TTS_GAP = 350;
+  const DICTATION_HINT = "Включи Диктовку в Настройки → Основные → Клавиатура";
+  // Safari (esp. continuous mode) may repeat/accumulate transcripts across results -> merge, don't duplicate
+  function mergeText(acc, piece) {
+    piece = tidy(piece);
+    if (!piece) return acc;
+    if (!acc) return piece;
+    const a = acc.toLowerCase(), p = piece.toLowerCase();
+    if (p.startsWith(a)) return piece;
+    if (a.endsWith(p) || a.includes(p)) return acc;
+    return acc + " " + piece;
+  }
+
+  function bestAlt(result) {
+    let best = null, bc = -1;
+    for (let j = 0; j < result.length; j++) {
+      const a = result[j] || (result.item && result.item(j));
+      if (!a || !a.transcript) continue;
+      const c = typeof a.confidence === "number" ? a.confidence : 0; // Safari often reports 0
+      if (c > bc) { best = a; bc = c; }
+    }
+    return best || { transcript: "", confidence: 0 };
+  }
+  function clearRecTimers(s) { clearTimeout(s.tNoSpeech); clearTimeout(s.tSilence); clearTimeout(s.tMax); clearTimeout(s.tEnd); }
+  function detachRec(r) { r.onresult = r.onerror = r.onend = r.onspeechstart = r.onaudiostart = r.onnomatch = null; }
+
+  // hard stop, no reply (before speaking, on tab hide, …)
+  function stopRecognition() {
+    const s = rec;
+    if (!s) return;
+    rec = null;
+    recEndedAt = performance.now();
+    clearRecTimers(s);
+    detachRec(s.r);
+    try { s.r.abort(); } catch {}
+    stopDemoMic();
+  }
+  // graceful stop: recognizer delivers the final result, then onend -> reply
+  function finishListening(s, why) {
+    if (!s || rec !== s || s.stopping) return;
+    s.stopping = why;
+    dbg("recognition stop:", why);
+    clearTimeout(s.tSilence); clearTimeout(s.tNoSpeech); clearTimeout(s.tMax);
+    try { s.r.stop(); } catch {}
+    s.tEnd = setTimeout(() => { // some engines (iOS) occasionally never fire onend after stop()
+      if (rec !== s) return;
+      rec = null; recEndedAt = performance.now(); detachRec(s.r);
+      try { s.r.abort(); } catch {}
       stopDemoMic();
-      recognition = null;
-      if (recError === "not-allowed" || recError === "service-not-allowed") {
-        setState("idle", "Нет доступа к микрофону — разреши его в браузере");
-        return;
+      onRecognitionEnd(s);
+    }, 2000);
+  }
+
+  function srUnavailable() {
+    setState("idle", "Распознавание речи недоступно");
+    face.setEmotion("sad");
+    caption(IS_IOS
+      ? "Распознавание речи недоступно. " + DICTATION_HINT + " (и Siri), обнови iOS и открой страницу в Safari. Или включи LIVE-режим с ключом OpenAI (⚙): он слышит намного лучше."
+      : "Этот браузер не умеет распознавать речь. Открой страницу в свежем Chrome (Android) или Safari (iPhone, iOS 14.5+). Или включи LIVE-режим с ключом OpenAI (⚙): он слышит намного лучше.", { force: true, err: true });
+  }
+
+  function startListening() {
+    if (!SR) { srUnavailable(); return; }
+    stopSpeaking();
+    stopRecognition();
+    setAudioSession("auto");
+    if (USE_MIC_METER) ensureAudioCtx();
+    let r;
+    try { r = new SR(); } catch (e) { console.error(e); srUnavailable(); return; }
+    const s = (rec = { r, final: "", interim: "", conf: 0, alts: [], error: "", stopping: "" });
+    r.lang = recLang();
+    // continuous=false everywhere except iOS: WebKit ends non-continuous sessions almost immediately,
+    // often before the user has finished. Our own silence timer (below) stops it on every platform.
+    r.continuous = IS_IOS;
+    r.interimResults = true;
+    r.maxAlternatives = 3;
+    r.onspeechstart = () => {
+      if (rec !== s) return;
+      levels.fake = 0.5;
+      if (appState === "listening") hintEl.textContent = "Слышу…";
+    };
+    r.onresult = (ev) => {
+      if (rec !== s) return;
+      let fin = "", inter = "", conf = 0, alts = [];
+      for (let i = 0; i < ev.results.length; i++) { // rebuilt from all results (Android repeats them)
+        const res = ev.results[i];
+        const best = bestAlt(res);
+        if (res.isFinal) {
+          fin = mergeText(fin, best.transcript);
+          conf = best.confidence || 0;
+          alts = [];
+          for (let j = 0; j < res.length; j++) {
+            const t = tidy(res[j] && res[j].transcript);
+            if (t && t !== tidy(best.transcript) && !alts.includes(t)) alts.push(t);
+          }
+        } else inter = mergeText(inter, best.transcript);
       }
-      if (recError === "audio-capture") { setState("idle", "Микрофон не найден"); return; }
-      if (recError === "network") { setState("idle", "Ошибка сети распознавания (Chrome шлёт звук на сервер Google)"); return; }
-      if (recError === "aborted") { setState("idle"); return; }
-      const text = (recFinal || recInterim).trim();
-      caption("you: " + (text || "∅"));
-      setState("thinking");
-      const reply = demoReply(text, recConfidence);
-      setTimeout(() => speak(reply.segs, reply.emotion), 450 + Math.random() * 600);
+      if (fin && inter && mergeText(fin, inter) === fin) inter = ""; // Safari repeats finals as interim
+      s.final = tidy(fin); s.interim = tidy(inter); s.conf = conf; s.alts = alts;
+      levels.fake = Math.max(levels.fake, 0.55);
+      const shown = mergeText(s.final, s.interim);
+      if (shown) caption("🎤 " + shown + (s.interim ? " …" : ""), { interim: !!s.interim });
+      // auto-stop after a short silence (iOS Safari otherwise keeps listening; some Androids too)
+      clearTimeout(s.tNoSpeech);
+      clearTimeout(s.tSilence);
+      s.tSilence = setTimeout(() => finishListening(s, "silence"), s.interim ? 1700 : 900);
+    };
+    r.onerror = (ev) => {
+      if (rec !== s) return;
+      s.error = (ev && ev.error) || "unknown";
+      console.warn("SpeechRecognition error", s.error, (ev && ev.message) || "");
+    };
+    r.onend = () => {
+      if (rec !== s) return;
+      rec = null;
+      recEndedAt = performance.now();
+      clearRecTimers(s);
+      stopDemoMic();
+      onRecognitionEnd(s);
     };
     try {
-      recognition.start();
-      setState("listening");
+      r.start();
     } catch (e) {
       console.error(e);
-      setState("idle", "Не удалось запустить распознавание");
+      rec = null;
+      recFail("Не удалось запустить распознавание — нажми ещё раз", "sad");
       return;
     }
-    // separate mic stream just for the level meter (eyes/brows react to your voice)
+    setState("listening");
+    caption("🎤 слушаю (" + r.lang + ")…", { interim: true });
+    s.tNoSpeech = setTimeout(() => finishListening(s, "no-speech-timeout"), 8000);
+    s.tMax = setTimeout(() => finishListening(s, "max-duration"), 15000);
+    if (USE_MIC_METER) startDemoMic(s);
+  }
+
+  const REC_ERR = {
+    "not-allowed": [IS_IOS
+      ? "Нет доступа к микрофону или распознаванию. Разреши микрофон (Настройки → Safari → Микрофон, или «аА» в адресной строке → Настройки сайта). " + DICTATION_HINT + "."
+      : "Нет доступа к микрофону. Разреши микрофон для этого сайта (значок у адресной строки).", "sad"],
+    "service-not-allowed": ["Распознавание речи запрещено. " + DICTATION_HINT + ", включи Siri и разреши микрофон для Safari (Настройки → Safari → Микрофон).", "sad"],
+    "audio-capture": ["Микрофон недоступен — не найден или занят другим приложением (звонок, диктофон). Закрой его и нажми ещё раз.", "bored"],
+    "network": ["Ошибка сети распознавания: браузер отправляет звук на сервер распознавания — проверь интернет. LIVE-режим (ключ OpenAI) работает надёжнее.", "bored"],
+    "language-not-supported": ["Этот язык распознавания не поддерживается браузером — переключи EN / IT внизу.", "sad"],
+  };
+  function recFail(msg, emo) {
+    setState("idle");
+    face.setEmotion(emo);
+    caption(msg, { force: true, err: true });
+    clearTimeout(recFail.t);
+    recFail.t = setTimeout(() => { if (appState === "idle") face.setEmotion("neutral"); }, 6000);
+  }
+  function onRecognitionEnd(s) {
+    const text = mergeText(s.final, s.interim);
+    const err = s.error;
+    dbg("recognition end", { err, text, conf: s.conf, alts: s.alts, why: s.stopping });
+    if (!text && err === "aborted") {
+      // iOS sometimes aborts by itself right after start (Siri/dictation off, or audio session busy)
+      if (IS_IOS && !s.stopping) { recFail("Распознавание оборвалось. Нажми и говори сразу. Если повторяется: " + DICTATION_HINT + ".", "sad"); return; }
+      setState("idle"); return;
+    }
+    if (!text && REC_ERR[err]) { recFail(...REC_ERR[err]); return; }
+    if (!text && err && err !== "no-speech") { recFail("Ошибка распознавания (" + err + ") — нажми и попробуй ещё раз.", "sad"); return; }
+    if (!text) { // 'no-speech' error, or our own silence timeout
+      setState("thinking");
+      face.setEmotion("sad");
+      caption("Ничего не услышал 🙉 Говори громче и ближе к микрофону, сразу после нажатия.", { force: true, err: true });
+      const reply = pick(R.nohear);
+      setTimeout(() => speakReply(reply, { keepCaption: true }), 700);
+      return;
+    }
+    const heard = "🎤 " + text + (s.alts.length ? "   (варианты: " + s.alts.join(" | ") + ")" : "");
+    caption(heard);
+    setState("thinking");
+    const reply = demoReply(text, s.conf);
+    setTimeout(() => speakReply(reply, { prefix: heard }), 450 + Math.random() * 600);
+  }
+  async function speakReply(reply, opts) {
+    if (appState !== "thinking") return; // the user did something else meanwhile
+    await voicesReady();
+    const wait = REC_TO_TTS_GAP - (performance.now() - recEndedAt);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    if (appState !== "thinking") return;
+    speak(reply.segs, reply.emotion, opts);
+  }
+
+  // separate mic stream just for the level meter (desktop only, see USE_MIC_METER)
+  async function startDemoMic(s) {
     try {
-      demoMicStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      if (appState === "listening") attachMic(demoMicStream); else stopDemoMic();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      if (rec === s && appState === "listening") { stopDemoMic(); demoMicStream = stream; attachMic(stream); }
+      else stream.getTracks().forEach((t) => t.stop());
     } catch { /* level meter is optional */ }
   }
   function stopDemoMic() {
@@ -711,7 +1088,7 @@ Avatar emotion:
 
   function demoTap() {
     if (appState === "idle") startListening();
-    else if (appState === "listening") recognition?.stop();
+    else if (appState === "listening") { if (rec) finishListening(rec, "tap"); else setState("idle"); }
     else if (appState === "speaking") { stopSpeaking(); startListening(); }
     // thinking: ignore
   }
@@ -837,10 +1214,10 @@ Avatar emotion:
       }
       if (S.closed) return;
       await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
-      caption("realtime: connected, waiting for session.created…");
+      dbg("realtime: connected, waiting for session.created…");
     } catch (err) {
       console.error(err);
-      caption("realtime error: " + (err.message || err));
+      caption("realtime error: " + (err.message || err), { force: true, err: true });
       disconnectRealtime(shortErr(err));
     }
   }
@@ -910,7 +1287,7 @@ Avatar emotion:
           try { emo = JSON.parse(item.arguments || "{}").emotion || "neutral"; } catch {}
           face.setEmotion(emo);
           S.emotionSet = true;
-          caption("emotion: " + emo);
+          dbg("emotion: " + emo);
           send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: item.call_id, output: JSON.stringify({ ok: true }) } });
         } else if (item?.type === "message") {
           S.hadAudio = true;
@@ -927,10 +1304,10 @@ Avatar emotion:
         }
         break;
       case "response.output_audio_transcript.done":
-        caption("tutor [" + face.emotion + "]: " + (ev.transcript || S.transcript));
+        caption("— " + (ev.transcript || S.transcript));
         break;
       case "conversation.item.input_audio_transcription.completed":
-        caption("you: " + ev.transcript);
+        caption("🎤 " + ev.transcript);
         break;
 
       case "response.done": {
@@ -1002,11 +1379,22 @@ Avatar emotion:
   // UI wiring
   // ---------------------------------------------------------------------------
   function tap() {
-    ensureAudioCtx();
-    if (isReal() || realSession) realTap();
-    else demoTap();
+    unlockTTS(); // must stay FIRST and synchronous: speech has to be started inside the user gesture
+    if (isReal() || realSession) { ensureAudioCtx(); realTap(); }
+    else { if (USE_MIC_METER) ensureAudioCtx(); demoTap(); }
   }
   faceBtn.addEventListener("click", tap);
+  // any first tap anywhere also unlocks speech (the sound-test button speaks by itself)
+  const unlockAny = (e) => { if (!(e.target && e.target.closest && e.target.closest("#testSoundBtn"))) unlockTTS(); };
+  document.addEventListener("click", unlockAny, true);
+  document.addEventListener("touchend", unlockAny, true);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden || realSession) return;
+    stopRecognition();
+    stopSpeaking();
+    if (appState !== "idle") setState("idle");
+    ttsUnlocked = false; // re-unlock on the next tap after coming back
+  });
 
   window.addEventListener("pointermove", (e) => face.onPointer(e.clientX, e.clientY), { passive: true });
   window.addEventListener("pointerdown", (e) => face.onPointer(e.clientX, e.clientY), { passive: true });
@@ -1014,16 +1402,17 @@ Avatar emotion:
 
   function renderLang() { langBtn.textContent = langMode; }
   langBtn.addEventListener("click", () => {
-    langMode = { AUTO: "EN", EN: "IT", IT: "AUTO" }[langMode] || "AUTO";
+    langMode = langMode === "EN" ? "IT" : "EN";
     localStorage.setItem(LS.lang, langMode);
     renderLang();
-    toast(langMode === "AUTO" ? "AUTO · en-US + детектор итальянского" : langMode === "EN" ? "en-US" : "it-IT");
+    toast(langMode === "EN" ? "Распознавание: English · en-US" : "Распознавание: Italiano · it-IT", 1800);
   });
 
   gearBtn.addEventListener("click", () => {
     keyInput.value = getKey();
     voiceSelect.value = voiceName();
-    captionToggle.checked = !captionEl.hidden;
+    captionToggle.checked = captionOn;
+    soundStatus.hidden = true;
     dlg.showModal();
   });
   dlg.addEventListener("close", () => {
@@ -1045,6 +1434,7 @@ Avatar emotion:
     toast("Ключ удалён · DEMO");
   });
   captionToggle.addEventListener("change", () => setCaptionVisible(captionToggle.checked));
+  testSoundBtn.addEventListener("click", testSound);
 
   // hidden debug keys: E = cycle emotions, S = cycle states, C = caption, Space/Enter = tap
   let emoIdx = 0, stIdx = 0;
@@ -1056,7 +1446,7 @@ Avatar emotion:
       emoIdx = (EMOTIONS.indexOf(face.emotion) + 1) % EMOTIONS.length;
       face.setEmotion(EMOTIONS[emoIdx]);
       toast("emotion · " + EMOTIONS[emoIdx]);
-    } else if (e.code === "KeyS" && !realSession && !recognition && !ttsActive) {
+    } else if (e.code === "KeyS" && !realSession && !rec && !tts.active) {
       stIdx = (STATES.indexOf(appState) + 1) % STATES.length;
       const keep = face.emotion;
       setState(STATES[stIdx]);
@@ -1067,12 +1457,17 @@ Avatar emotion:
   });
 
   // expose a tiny debug handle
-  window.voiceTutor = { face, setState, demoReply, findMistakes, looksItalian, get realSession() { return realSession; } };
+  window.voiceTutor = {
+    face, setState, demoReply, mergeText, findMistakes, looksItalian, splitSentences, pickVoice, bestAlt, testSound, speak,
+    voicesReady, platform: { IS_IOS, IS_ANDROID, IS_MOBILE, USE_MIC_METER, HAS_TTS, HAS_SR: !!SR },
+    get state() { return appState; }, get tts() { return tts; }, get rec() { return rec; }, get ttsUnlocked() { return ttsUnlocked; },
+    get realSession() { return realSession; },
+  };
 
   // init
   refreshMode();
   renderLang();
-  setCaptionVisible(localStorage.getItem(LS.caption) === "1");
+  setCaptionVisible(localStorage.getItem(LS.caption) !== "0"); // live caption on by default
   setState("idle");
   // preview helpers: ?emotion=angry&state=thinking
   const qp = new URLSearchParams(location.search);
@@ -1081,5 +1476,5 @@ Avatar emotion:
     face.setDemoSpeaking(qp.get("state") === "speaking");
   }
   if (qp.get("emotion")) face.setEmotion(qp.get("emotion"));
-  if (!SR && !isReal()) hintEl.textContent = "Нажми и говори (лучше в Chrome)";
+  if (!SR && !isReal()) srUnavailable();
 })();

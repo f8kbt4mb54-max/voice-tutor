@@ -102,13 +102,24 @@ body[data-state="speaking"] .hint { opacity: .35; }
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap;
   user-select: text;
+  min-height: 2.9em;
+  transition: color .3s ease;
+}
+/* keep the caption's space reserved so the face doesn't jump when it appears */
+.caption[hidden] { display: block; visibility: hidden; }
+.caption.interim { color: rgba(207, 200, 255, 0.34); font-style: italic; }
+.caption.err {
+  color: #ffb8c8;
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: .01em;
 }
 
 .toast {
   position: fixed;
   z-index: 5;
   left: 50%;
-  bottom: 64px;
+  bottom: 92px;
   transform: translateX(-50%);
   margin: 0;
   font-size: 12px;
@@ -120,6 +131,39 @@ body[data-state="speaking"] .hint { opacity: .35; }
   pointer-events: none;
 }
 .toast.show { opacity: 1; }
+.toast.long {
+  width: max-content;
+  max-width: 88vw;
+  text-transform: none;
+  letter-spacing: .02em;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--text);
+  background: rgba(20, 15, 46, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 14px;
+}
+
+.live-note {
+  position: fixed;
+  z-index: 4;
+  left: 50%;
+  bottom: 50px;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(520px, 88vw);
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--faint);
+  transition: opacity .4s ease;
+  pointer-events: none;
+}
+body[data-mode="real"] .live-note,
+body:not([data-state="idle"]) .live-note { opacity: 0; }
 
 /* ---------- corner controls ---------- */
 .badge {
@@ -190,6 +234,7 @@ body[data-mode="real"] .lang { display: none; }
 .field input:focus, .field select:focus { border-color: rgba(140, 110, 255, 0.6); }
 .check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .note { margin: 0; font-size: 11px; line-height: 1.5; color: var(--faint); }
+.sound-status { color: var(--muted); white-space: pre-line; }
 .row { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }
 .btn {
