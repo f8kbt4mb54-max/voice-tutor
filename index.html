@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07060f" />
+  <title>Mr. Grumble — voice English tutor</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Crect x=%228%22 y=%2210%22 width=%2284%22 height=%2280%22 rx=%2236%22 fill=%22%236a4ff0%22/%3E%3Ccircle cx=%2235%22 cy=%2245%22 r=%2210%22 fill=%22%23fff%22/%3E%3Ccircle cx=%2265%22 cy=%2245%22 r=%2210%22 fill=%22%23fff%22/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-state="idle" data-mode="demo">
+  <div class="bg" aria-hidden="true"></div>
+
+  <span id="modeBadge" class="badge" title="Режим">DEMO</span>
+
+  <button id="gearBtn" class="gear" aria-label="Настройки" title="Настройки">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path fill="currentColor" d="M19.14 12.94a7.5 7.5 0 0 0 .05-.94 7.5 7.5 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.58.24-1.12.55-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.72 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.5 7.5 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.3.6.22l2.39-.96c.5.39 1.04.7 1.62.94l.36 2.54c.04.24.25.42.49.42h3.8c.24 0 .45-.18.49-.42l.36-2.54c.58-.24 1.12-.55 1.62-.94l2.39.96c.22.08.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/>
+    </svg>
+  </button>
+
+  <main class="stage">
+    <button id="face" class="face-btn" aria-label="Нажми и говори">
+      <span class="ring r1" aria-hidden="true"></span>
+      <span class="ring r2" aria-hidden="true"></span>
+      <span class="ring r3" aria-hidden="true"></span>
+      <svg id="faceSvg" class="face" viewBox="-200 -200 400 400" aria-hidden="true">
+        <defs>
+          <radialGradient id="glowGrad">
+            <stop offset="0" stop-color="#8f6bff" stop-opacity=".55" />
+            <stop offset=".55" stop-color="#5b3df0" stop-opacity=".18" />
+            <stop offset="1" stop-color="#3a1fb8" stop-opacity="0" />
+          </radialGradient>
+          <!-- userSpaceOnUse so eyelids filled with the same gradient match the head exactly -->
+          <radialGradient id="headGrad" gradientUnits="userSpaceOnUse" cx="-55" cy="-95" r="290">
+            <stop offset="0" stop-color="#a493ff" />
+            <stop offset=".38" stop-color="#7055f0" />
+            <stop offset=".75" stop-color="#4a2fc4" />
+            <stop offset="1" stop-color="#2a1879" />
+          </radialGradient>
+          <radialGradient id="scleraGrad" cx=".45" cy=".4" r=".7">
+            <stop offset="0" stop-color="#fbfaff" />
+            <stop offset=".75" stop-color="#e9e4ff" />
+            <stop offset="1" stop-color="#c3b7ff" />
+          </radialGradient>
+          <radialGradient id="irisGrad" cx=".5" cy=".5" r=".5">
+            <stop offset="0" stop-color="#2a1a7a" />
+            <stop offset=".55" stop-color="#5d3cf2" />
+            <stop offset=".9" stop-color="#9a82ff" />
+            <stop offset="1" stop-color="#3b25a8" />
+          </radialGradient>
+          <radialGradient id="heatGrad" gradientUnits="userSpaceOnUse" cx="0" cy="-40" r="220">
+            <stop offset="0" stop-color="#ff3d7f" stop-opacity=".0" />
+            <stop offset=".7" stop-color="#ff3d6e" stop-opacity=".35" />
+            <stop offset="1" stop-color="#ff2a55" stop-opacity=".55" />
+          </radialGradient>
+          <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="14" /></filter>
+          <clipPath id="clipL"><ellipse id="clipEyeL" cx="-62" cy="-18" rx="40" ry="46" /></clipPath>
+          <clipPath id="clipR"><ellipse id="clipEyeR" cx="62" cy="-18" rx="40" ry="46" /></clipPath>
+          <clipPath id="clipHead"><rect x="-148" y="-138" width="296" height="280" rx="128" ry="122" /></clipPath>
+        </defs>
+
+        <circle id="glow" cx="0" cy="0" r="200" fill="url(#glowGrad)" />
+        <ellipse id="shadow" cx="0" cy="168" rx="110" ry="14" fill="#000" opacity=".45" filter="url(#soft)" />
+
+        <g id="head">
+          <rect x="-148" y="-138" width="296" height="280" rx="128" ry="122" fill="url(#headGrad)" />
+          <ellipse cx="-58" cy="-98" rx="66" ry="28" fill="#fff" opacity=".13" transform="rotate(-18 -58 -98)" />
+          <rect x="-148" y="-138" width="296" height="280" rx="128" ry="122" fill="none" stroke="#c9bdff" stroke-opacity=".28" stroke-width="2" />
+
+          <ellipse id="blushL" cx="-92" cy="52" rx="26" ry="13" fill="#ff7ab8" opacity="0" filter="url(#soft)" />
+          <ellipse id="blushR" cx="92" cy="52" rx="26" ry="13" fill="#ff7ab8" opacity="0" filter="url(#soft)" />
+
+          <g id="eyeL" clip-path="url(#clipL)">
+            <ellipse id="scleraL" cx="-62" cy="-18" rx="40" ry="46" fill="url(#scleraGrad)" />
+            <g id="irisL">
+              <circle r="23" fill="url(#irisGrad)" />
+              <circle class="pupil" r="11" fill="#0a0620" />
+              <circle cx="-8" cy="-9" r="5.5" fill="#fff" opacity=".95" />
+              <circle cx="7" cy="7" r="2.2" fill="#fff" opacity=".7" />
+            </g>
+            <path id="lidUL" fill="url(#headGrad)" />
+            <path id="lidLL" fill="url(#headGrad)" />
+            <path id="lashUL" fill="none" stroke="#170e3d" stroke-width="3.5" stroke-linecap="round" />
+          </g>
+          <g id="eyeR" clip-path="url(#clipR)">
+            <ellipse id="scleraR" cx="62" cy="-18" rx="40" ry="46" fill="url(#scleraGrad)" />
+            <g id="irisR">
+              <circle r="23" fill="url(#irisGrad)" />
+              <circle class="pupil" r="11" fill="#0a0620" />
+              <circle cx="-8" cy="-9" r="5.5" fill="#fff" opacity=".95" />
+              <circle cx="7" cy="7" r="2.2" fill="#fff" opacity=".7" />
+            </g>
+            <path id="lidUR" fill="url(#headGrad)" />
+            <path id="lidLR" fill="url(#headGrad)" />
+            <path id="lashUR" fill="none" stroke="#170e3d" stroke-width="3.5" stroke-linecap="round" />
+          </g>
+
+          <!-- anger flush sits above the eyes so lids and skin tint together -->
+          <rect id="heat" x="-148" y="-138" width="296" height="280" rx="128" ry="122" fill="url(#heatGrad)" opacity="0" />
+
+          <path id="browL" fill="none" stroke="#150c38" stroke-width="13" stroke-linecap="round" />
+          <path id="browR" fill="none" stroke="#150c38" stroke-width="13" stroke-linecap="round" />
+
+          <path id="mouth" fill="#120a2e" stroke="#120a2e" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" />
+        </g>
+      </svg>
+    </button>
+    <p id="hint" class="hint">Нажми и говори</p>
+    <p id="caption" class="caption" hidden></p>
+    <p id="toast" class="toast" aria-live="polite"></p>
+  </main>
+
+  <button id="langBtn" class="lang" title="Язык распознавания (demo)">AUTO</button>
+
+  <dialog id="settings" class="settings">
+    <form method="dialog" class="settings-inner">
+      <h2>Настройки</h2>
+
+      <label class="field">
+        <span>OpenAI API key <small>(хранится только в localStorage этого браузера)</small></span>
+        <input id="keyInput" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
+      </label>
+
+      <label class="field">
+        <span>Голос (real mode)</span>
+        <select id="voiceSelect">
+          <option value="cedar">cedar</option>
+          <option value="marin">marin</option>
+          <option value="ash">ash</option>
+          <option value="ballad">ballad</option>
+          <option value="echo">echo</option>
+          <option value="verse">verse</option>
+          <option value="sage">sage</option>
+          <option value="coral">coral</option>
+          <option value="alloy">alloy</option>
+          <option value="shimmer">shimmer</option>
+        </select>
+      </label>
+
+      <label class="check">
+        <input id="captionToggle" type="checkbox" />
+        <span>Показывать отладочную подпись</span>
+      </label>
+
+      <p class="note">Без ключа работает DEMO (Web Speech API, лучше в Chrome). С ключом — OpenAI Realtime (gpt-realtime-2.1-mini) через WebRTC. Ключ в браузере — только для личного локального использования.</p>
+
+      <div class="row">
+        <button id="clearKeyBtn" type="button" class="btn ghost">Удалить ключ</button>
+        <span class="spacer"></span>
+        <button value="cancel" class="btn ghost">Закрыть</button>
+        <button id="saveBtn" value="save" class="btn primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
